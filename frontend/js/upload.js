@@ -18,7 +18,7 @@ async function upload() {
         let formData = new FormData()
         formData.append("file", file)
 
-        let response = await fetch("http://127.0.0.1:5000/analyze", {
+        let response = await fetch("https://ai-tracefinder.onrender.com", {
             method: "POST",
             body: formData
         })
