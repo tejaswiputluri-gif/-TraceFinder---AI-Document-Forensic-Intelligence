@@ -297,6 +297,69 @@ def scanner_feats(res, fps, fp_keys, scaler):
     return scaler.transform(v)
 
 
+def load_calibration():
+    calibration_path = os.path.join(ART_DIR, 'calibration_info.json')
+    params_path = os.path.join(ART_DIR, 'calibration_params.json')
+
+    if os.path.exists(calibration_path):
+        with open(calibration_path, 'r', encoding='utf-8') as handle:
+            calibration = json.load(handle)
+        return {
+            'temperature': float(calibration.get('temperature', 2.5)),
+            'bias_by_class': [float(x) for x in calibration.get('calibrated_bias', [])],
+        }
+
+    if os.path.exists(params_path):
+        with open(params_path, 'r', encoding='utf-8') as handle:
+            calibration = json.load(handle)
+        class_adjustments = calibration.get('class_adjustments', {})
+        return {
+            'temperature': float(calibration.get('temperature', 2.5)),
+            'class_adjustments': {
+                'canon': float(class_adjustments.get('canon', -1.0)),
+                'epson': float(class_adjustments.get('epson', 0.8)),
+                'hp': float(class_adjustments.get('hp', 0.8)),
+            },
+        }
+
+    return {'temperature': 1.0}
+
+
+def apply_calibration(raw_probs, classes, calibration):
+    probs = np.asarray(raw_probs, dtype=np.float32).ravel()
+    if probs.size == 0:
+        return probs
+
+    temperature = max(0.5, float(calibration.get('temperature', 1.0)))
+    logits = np.log(np.clip(probs, 1e-8, 1.0)) / temperature
+
+    bias_by_class = calibration.get('bias_by_class')
+    if isinstance(bias_by_class, list) and len(bias_by_class) == len(classes):
+        logits = logits + np.asarray(bias_by_class, dtype=np.float32)
+    else:
+        class_adjustments = calibration.get('class_adjustments', {})
+        if class_adjustments:
+            canon_bias = float(class_adjustments.get('canon', 0.0))
+            epson_bias = float(class_adjustments.get('epson', 0.0))
+            hp_bias = float(class_adjustments.get('hp', 0.0))
+            normalized_classes = [normalize_label(cls) for cls in classes]
+            logits = np.array([
+                value + (
+                    canon_bias if normalized in {'canon1201', 'canon1202', 'canon220', 'canon90001', 'canon90002'}
+                    else epson_bias if normalized.startswith('epson')
+                    else hp_bias if normalized == 'hp'
+                    else 0.0
+                )
+                for value, normalized in zip(logits, normalized_classes)
+            ], dtype=np.float32)
+
+    calibrated = tf.nn.softmax(logits).numpy().ravel()
+    total = float(np.sum(calibrated))
+    if total > 0:
+        calibrated = calibrated / total
+    return calibrated
+
+
 def load_arts():
     required = {
         'model': f'{ART_DIR}/scanner_hybrid.keras',
@@ -320,6 +383,7 @@ def load_arts():
         'scaler': pickle.load(open(required['scaler'], 'rb')),
         'fps': pickle.load(open(required['fps'], 'rb')),
         'fp_keys': np.load(required['fpk'], allow_pickle=True).tolist(),
+        'calibration': load_calibration(),
         'patch_support': False,
     }
 
@@ -342,31 +406,11 @@ def run_inference(img_bgr, arts, pil_img=None):
     res = load_residual(img_bgr)
     x_img = np.expand_dims(res, axis=(0, -1)).astype(np.float32)
     x_ft = scanner_feats(res, arts['fps'], arts['fp_keys'], arts['scaler'])
-    
-    # DEBUG: Function called
-    import sys
-    print(f"DEBUG: run_inference called, suitability accepted: {suitability['accepted']}", file=sys.stderr)
-    sys.stderr.flush()
-    
-    # Get raw probabilities and apply calibration to fix Canon bias
+
+    # Get the model probabilities and then apply the saved calibration.
     raw_probs = arts['model'].predict([x_img, x_ft], verbose=0).ravel()
-    
-    # Apply AGGRESSIVE temperature scaling calibration to fix severe Canon bias
-    # The model strongly overfits to Canon9000-1, so we need strong correction
-    TEMP = 5.0  # Higher temp = more uniform distribution
-    class_adjustments = np.array([
-        -3.0 if normalize_label(c) in {normalize_label(x) for x in ['Canon120-1', 'Canon120-2', 'Canon220', 'Canon9000-1', 'Canon9000-2']} else 1.5
-        for c in arts['le'].classes_
-    ], dtype=np.float32)  # Strongly penalize Canon, strongly boost Epson/HP
-    
-    try:
-        raw_logits = np.log(np.clip(raw_probs, 1e-8, 1.0))
-        raw_logits = raw_logits - np.max(raw_logits)  # numerically stable
-        scaled_logits = raw_logits / TEMP + class_adjustments
-        probs = tf.nn.softmax(scaled_logits).numpy().ravel()
-    except Exception as e:
-        print(f"ERROR in calibration: {e}", file=sys.stderr)
-        raise
+
+    probs = apply_calibration(raw_probs, arts['le'].classes_, arts.get('calibration', {}))
     
     top3 = [(arts['le'].classes_[i], float(probs[i]) * 100) for i in np.argsort(probs)[::-1][:3]]
     top1_name, top1_score = top3[0]

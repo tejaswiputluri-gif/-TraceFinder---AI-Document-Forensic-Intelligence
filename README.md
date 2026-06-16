@@ -40,6 +40,7 @@ TraceFinder uses a **hybrid deep learning model** (CNN + PRNU fingerprinting) to
 - 🔐 User authentication & session management
 - ⚡ Fast inference (~2 seconds per image)
 
+
 ## 🏗️ System Architecture
 
 ```
