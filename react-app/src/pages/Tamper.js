@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
-import { useLocation } from 'react-router-dom';
 import { AlertTriangle, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
 
 const Tamper = ({ triggerToast }) => {
-  const location = useLocation();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   
   // Sample tampering analysis data

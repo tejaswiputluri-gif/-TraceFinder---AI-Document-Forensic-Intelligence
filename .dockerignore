@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+.env
+.env.*
+react-app/node_modules/
+react-app/build/
+*.ipynb
+*.log

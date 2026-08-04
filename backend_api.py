@@ -1,6 +1,7 @@
 import os
 import json
 import pickle
+from pathlib import Path
 from io import BytesIO
 from PIL import Image
 from flask import Flask, request, jsonify
@@ -10,6 +11,42 @@ import numpy as np
 import cv2
 import pywt
 import tensorflow as tf
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+try:
+    from pymongo import MongoClient
+    from pymongo.errors import PyMongoError
+except ImportError:
+    MongoClient = None
+    PyMongoError = Exception
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_FILE = Path(BASE_DIR) / '.env'
+
+
+def load_runtime_env():
+    if load_dotenv is not None:
+        load_dotenv(ENV_FILE, override=False)
+        return
+
+    if not ENV_FILE.exists():
+        return
+
+    for raw_line in ENV_FILE.read_text(encoding='utf-8').splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip().strip('"\'')
+        os.environ.setdefault(key, value)
+
+
+load_runtime_env()
 
 # patch outdated model configs that include quantization metadata
 try:
@@ -36,6 +73,12 @@ SUPPORTED_SCANNERS = {
 }
 
 MAX_UPLOAD_SIZE = 200 * 1024 * 1024
+MONGO_URI = os.getenv('MONGO_URI') or os.getenv('MONGODB_URI') or 'mongodb://127.0.0.1:27017/tracefinder'
+MONGO_DB_NAME = 'tracefinder'
+MONGO_CLIENT = None
+MONGO_DB = None
+MONGO_STATUS = 'disconnected'
+MONGO_COLLECTIONS = []
 
 SCANNER_NAME_MAP = {
     'canon120-1': ('Canon', 'LiDE 120'),
@@ -401,6 +444,65 @@ def load_arts():
     return arts, missing_optional
 
 
+def connect_to_mongo():
+    global MONGO_CLIENT, MONGO_DB, MONGO_STATUS, MONGO_COLLECTIONS
+
+    if MongoClient is None:
+        MONGO_STATUS = 'unavailable'
+        return False
+
+    try:
+        MONGO_CLIENT = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+        MONGO_CLIENT.admin.command('ping')
+        MONGO_DB = MONGO_CLIENT[MONGO_DB_NAME]
+        MONGO_COLLECTIONS = list(MONGO_DB.list_collection_names())
+        MONGO_STATUS = 'connected'
+        print('MongoDB connected successfully')
+        return True
+    except Exception as exc:
+        MONGO_STATUS = 'disconnected'
+        MONGO_COLLECTIONS = []
+        print(f'MongoDB connection warning: {exc}')
+        return False
+
+
+def print_startup_banner():
+    if ARTS is None:
+        model_status = 'missing'
+        le_status = 'missing'
+        scaler_status = 'missing'
+        prnu_status = 'missing'
+    else:
+        model_status = 'loaded'
+        le_status = 'loaded' if ARTS.get('le') is not None else 'missing'
+        scaler_status = 'loaded' if ARTS.get('scaler') is not None else 'missing'
+        prnu_status = 'loaded' if ARTS.get('fps') is not None else 'missing'
+
+    print('=================================================================')
+    print('                     🚀 TRACEFINDER AI BACKEND                    ')
+    print('=================================================================')
+    print(f'✅ TensorFlow             : {"loaded" if tf is not None else "missing"}')
+    print(f'✅ Scanner Model          : {model_status}')
+    print(f'✅ Label Encoder          : {le_status}')
+    print(f'✅ Feature Scaler         : {scaler_status}')
+    print(f'✅ PRNU Fingerprints      : {prnu_status}')
+    print(f'✅ MongoDB               : {MONGO_STATUS}')
+    print(f'🌐 URL                   : http://localhost:{int(os.getenv("PORT", 5000))}')
+    print('=================================================================')
+    print('Available APIs')
+    print('- GET     /')
+    print('- GET     /about')
+    print('- GET     /health')
+    print('- GET     /db-status')
+    print('- GET     /api')
+    print('- POST    /api/analyze')
+    print('- POST    /save')
+    print('- GET     /records')
+    print('- PUT     /update/<id>')
+    print('- DELETE  /delete/<id>')
+    print('=================================================================')
+
+
 def run_inference(img_bgr, arts, pil_img=None):
     suitability = scanner_input_suitability(img_bgr, pil_img=pil_img)
     res = load_residual(img_bgr)
@@ -561,6 +663,25 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_SIZE
 CORS(app)
 
 ARTS, MISSING_ARTS = load_arts()
+connect_to_mongo()
+
+@app.route('/health')
+def health_status():
+    return jsonify({
+        'status': 'ok',
+        'backend': 'TraceFinder API',
+        'mongodb': MONGO_STATUS,
+        'collections': MONGO_COLLECTIONS,
+    })
+
+@app.route('/db-status')
+def db_status():
+    return jsonify({
+        'status': MONGO_STATUS,
+        'database': MONGO_DB_NAME if MONGO_DB else None,
+        'collections': MONGO_COLLECTIONS,
+        'uri': MONGO_URI,
+    })
 
 @app.errorhandler(RequestEntityTooLarge)
 def handle_too_large(e):
@@ -592,18 +713,22 @@ def analyze():
         return jsonify({'error': 'Analysis failed', 'details': str(exc)}), 500
 
 @app.route('/')
-def health():
+def home():
     return jsonify({'status': 'ok', 'backend': 'TraceFinder API'})
 
+
 def run_production_server():
+    port = int(os.getenv('PORT', 5000))
     try:
         from waitress import serve
         print('Starting backend with Waitress production WSGI server...')
-        serve(app, host='0.0.0.0', port=5000)
+        serve(app, host='0.0.0.0', port=port)
     except ImportError:
         print('Waitress is not installed. Falling back to Flask development server.')
-        app.run(host='0.0.0.0', port=5000, debug=False)
+        app.run(host='0.0.0.0', port=port, debug=False)
 
 
 if __name__ == '__main__':
+    print('Starting TraceFinder backend startup sequence')
+    print_startup_banner()
     run_production_server()

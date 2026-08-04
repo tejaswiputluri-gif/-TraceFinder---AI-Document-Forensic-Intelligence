@@ -13,28 +13,43 @@ const client = new MongoClient(uri);
 const PORT = Number(process.env.NODE_PORT || 5001);
 
 let db;
+let mongoStatus = 'disconnected';
 
 async function connectToDatabase() {
   try {
     await client.connect();
     db = client.db('tracefinder');
+    mongoStatus = 'connected';
     console.log('MongoDB connected successfully');
   } catch (err) {
+    mongoStatus = 'disconnected';
     console.error('MongoDB connection error:', err.message);
-    process.exit(1);
   }
 }
 
 app.get('/health', async (req, res) => {
   try {
     if (!db) {
-      return res.status(503).json({ status: 'connecting' });
+      return res.status(503).json({ status: 'disconnected', mongodb: mongoStatus });
     }
     const admin = db.admin();
     const result = await admin.ping();
-    res.json({ status: 'ok', mongodb: result });
+    res.json({ status: 'ok', mongodb: result, dbStatus: mongoStatus });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, dbStatus: mongoStatus });
+  }
+});
+
+app.get('/db-status', async (req, res) => {
+  try {
+    if (!db) {
+      return res.status(503).json({ status: 'disconnected', mongodb: mongoStatus });
+    }
+    const admin = db.admin();
+    const result = await admin.ping();
+    res.json({ status: 'ok', mongodb: result, dbStatus: mongoStatus });
+  } catch (err) {
+    res.status(500).json({ error: err.message, dbStatus: mongoStatus });
   }
 });
 
@@ -116,8 +131,8 @@ app.get('/api/records', async (req, res) => {
   }
 });
 
-connectToDatabase().then(() => {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+connectToDatabase();
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });

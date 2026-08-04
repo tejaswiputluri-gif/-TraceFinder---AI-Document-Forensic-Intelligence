@@ -18,4 +18,5 @@ Flask-Login>=0.6.0
 Flask-SQLAlchemy>=3.0.0
 Werkzeug>=2.3.0
 waitress>=2.1.0
+pymongo>=4.8.0
 

@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Users, Activity, Clock } from 'lucide-react';
+import { Users, Clock } from 'lucide-react';
 
 const Groups = ({ history, triggerToast }) => {
   const getScannerColor = (brand) => {
