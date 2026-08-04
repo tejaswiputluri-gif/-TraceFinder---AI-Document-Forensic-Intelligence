@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Mail, Lock, User, Chrome, Facebook } from 'lucide-react';
 
+const AUTH_API_BASE_URL = process.env.REACT_APP_AUTH_API_BASE_URL || 'http://localhost:5001';
+
 const Auth = ({ setIsAuthenticated }) => {
   const [isLogin, setIsLogin] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
@@ -24,20 +26,41 @@ const Auth = ({ setIsAuthenticated }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
-    
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    // Store auth state
-    localStorage.setItem('tracefinder-auth', 'true');
-    localStorage.setItem('tracefinder-user', JSON.stringify({
-      email: formData.email,
-      name: formData.name || formData.email.split('@')[0]
-    }));
-    
-    setIsAuthenticated(true);
-    setIsLoading(false);
-    navigate('/');
+
+    try {
+      const endpoint = isLogin ? '/api/login' : '/api/signup';
+      const requestBody = isLogin
+        ? { email: formData.email, password: formData.password }
+        : {
+            name: formData.name,
+            email: formData.email,
+            password: formData.password,
+          };
+
+      const response = await fetch(`${AUTH_API_BASE_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+
+      const responseData = await response.json();
+      if (!response.ok) {
+        throw new Error(responseData.error || 'Authentication failed');
+      }
+
+      localStorage.setItem('tracefinder-auth', 'true');
+      localStorage.setItem('tracefinder-user', JSON.stringify({
+        email: responseData.user?.email || formData.email,
+        name: responseData.user?.name || formData.name || formData.email.split('@')[0]
+      }));
+
+      setIsAuthenticated(true);
+      navigate('/');
+    } catch (error) {
+      alert(error.message || 'Authentication failed');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleGoogleLogin = async () => {

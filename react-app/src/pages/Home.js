@@ -2,6 +2,8 @@ import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, FileText, AlertCircle } from 'lucide-react';
 
+const PYTHON_API_BASE_URL = process.env.REACT_APP_PYTHON_API_BASE_URL || 'http://localhost:5000';
+
 const Home = ({ onAnalysis, triggerToast }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -57,7 +59,7 @@ const Home = ({ onAnalysis, triggerToast }) => {
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      const response = await fetch('http://localhost:5000/api/analyze', {
+      const response = await fetch(`${PYTHON_API_BASE_URL}/api/analyze`, {
         method: 'POST',
         body: formData,
       });
